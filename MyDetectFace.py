@@ -137,7 +137,7 @@ def MyMtcnnNet(sess):
     with tf.variable_scope('pnet'):
         image_data = tf.placeholder(tf.float32, (None,None,3), 'input')
         scales = tf.placeholder(tf.float32, (None), 'scales')
-        scale_len = tf.placeholder(tf.int32, None, 'scale_len')
+        scale_len = tf.shape(scales)[0]
         #loop init
         total_boxes = tf.zeros([1, 9], dtype=tf.float32, name='total_boxes')
         i0 = tf.constant(0)
@@ -295,11 +295,10 @@ def build():
     img = cv2.imread(imgPath, cv2.IMREAD_COLOR)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     scales = get_scales(img)
-    scale_len = np.array(len(scales), dtype=np.int32)
     scales = np.array(scales, dtype=np.float32)
     sess = tf.Session()
-    result, image_data1, scales1, scale_len1 = MyMtcnnNet(sess)
-    boxes, points = sess.run(result, feed_dict={image_data1:img, scales1:scales, scale_len1:scale_len})
+    result, image_data1, scales1 = MyMtcnnNet(sess)
+    boxes, points = sess.run(result, feed_dict={image_data1:img, scales1:scales})
     # g = tf.get_default_graph().as_graph_def()
     # for n in g.node:
     #     print(n.name)
