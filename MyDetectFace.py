@@ -114,6 +114,28 @@ def generateTFBox(imap, reg, scale):
     boxes = tf.concat([q1, q2, score, reg], axis=1)
     return boxes
 
+
+def get_scales_tf(img):
+    minsize = tf.constant(20.0)
+    factor = tf.constant(0.709)
+    i0 = tf.constant(0)
+    minl = tf.cast(tf.math.reduce_min(tf.shape(img)[:2]), tf.float32)
+    m = 12.0/minsize
+    minl = minl*m
+    scales = tf.ones([1,])
+    c = lambda i, scales, minl: minl>=12
+    def body(i, scales, minl):
+        pi = tf.cast(i, tf.float32)
+        s = m*tf.math.pow(factor, pi)
+        s_ex = tf.expand_dims(s, 0)
+        scales = tf.concat([scales, s_ex], axis=0)
+        minl = minl*factor
+        i += 1
+        return i, scales, minl
+    ret = tf.while_loop(c, body, loop_vars=[i0, scales, minl], shape_invariants=[i0.get_shape(), tf.TensorShape([None,]), minl.get_shape()])
+    return ret[1][1:]
+
+
 def MyMtcnnNet(sess):
     def load_np(data_path, session, ignore_missing=False):
         """Load network weights.
@@ -136,7 +158,7 @@ def MyMtcnnNet(sess):
     model_path,_ = os.path.split(os.path.realpath(__file__))
     with tf.variable_scope('pnet'):
         image_data = tf.placeholder(tf.float32, (None,None,3), 'input')
-        scales = tf.placeholder(tf.float32, (None), 'scales')
+        scales = get_scales_tf(image_data)
         scale_len = tf.shape(scales)[0]
         #loop init
         total_boxes = tf.zeros([1, 9], dtype=tf.float32, name='total_boxes')
@@ -271,7 +293,8 @@ def MyMtcnnNet(sess):
         pointsXY = tf.gather(pointsXY, nms_inds3, name='points')
         load_np(os.path.join(model_path, 'det3.npy'), sess)
 
-    return [boxes, pointsXY], image_data, scales, scale_len
+    return [boxes, pointsXY], image_data
+
 
 def get_scales(img):
     minsize=20
@@ -291,20 +314,23 @@ def get_scales(img):
     return scales
 
 def build():
-    imgPath = "align\\stars.jpg"
+    '''
+    input_node: pnet/input, pnet/scales, pnet/scale_len
+    output_node: onet/boxes, onet/points
+    '''
+    imgPath = "stars.jpg"
     img = cv2.imread(imgPath, cv2.IMREAD_COLOR)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     scales = get_scales(img)
     scales = np.array(scales, dtype=np.float32)
     sess = tf.Session()
-    result, image_data1, scales1 = MyMtcnnNet(sess)
-    boxes, points = sess.run(result, feed_dict={image_data1:img, scales1:scales})
+    result, image_data1 = MyMtcnnNet(sess)
+    boxes, points = sess.run(result, feed_dict={image_data1:img})
     # g = tf.get_default_graph().as_graph_def()
     # for n in g.node:
     #     print(n.name)
     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     drawFaces(img, list(boxes), list(points))
-
 
 def drawFaces(img, boxes, points):
     cuts = []
@@ -318,7 +344,7 @@ def drawFaces(img, boxes, points):
         b2 = int(b[2])
         b3 = int(b[3])
         score = b[4]
-        if score < 0.98:
+        if score < 0.95:
             continue
         mid = (int((b0 + b2) / 2) - 15, int((b1 + b3) / 2)+5)
         top = (int((b0 + b2) / 2) - 15, b1-4)
@@ -327,7 +353,6 @@ def drawFaces(img, boxes, points):
         pts = points[i].astype(np.int32)
         ptsX = pts[:5]
         ptsY = pts[5:]
-        ptsXY = np.array([ptsX, ptsY], dtype=np.float32).T
         for i in range(ptsX.shape[0]):
             cv2.circle(img, (ptsX[i], ptsY[i]), 2, (0,0,255))
     cv2.imshow('faces', img)
