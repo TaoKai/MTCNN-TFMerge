@@ -358,7 +358,7 @@ def build():
     input_node: pnet/input, pnet/scales, pnet/scale_len
     output_node: onet/boxes, onet/points
     '''
-    imgPath = "C:\\Users\\admin\\Pictures\\f.jpg"
+    imgPath = "C:\\Users\\admin\\Pictures\\stars.jpg"
     img = cv2.imread(imgPath, cv2.IMREAD_COLOR)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     scales = get_scales(img)
