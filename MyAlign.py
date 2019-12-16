@@ -98,7 +98,7 @@ def drawFaces(img, boxes, points, savePath):
             cv2.imwrite(os.path.join(savePath, str(i)+'.jpg'), cut)
         for i in range(ptsX.shape[0]):
             cv2.circle(img, (ptsX[i], ptsY[i]), 2, (0,0,255))
-    # cv2.imshow('image', img)
+    cv2.imshow('image', img)
     if len(cuts)>0:
         batch_img = batchShow(cuts)
         cv2.imshow('faces', batch_img)
@@ -180,7 +180,7 @@ def cutFaces(datasetPath, ids, imgs, func):
 
 
 if __name__ == "__main__":
-    imgPath = "C:\\Users\\admin\\Pictures\\f.jpg"
+    imgPath = "stars.jpg"
     savePath = "D:\\workspace\\data\\mtcnn_faces\\99"
     img = cv2.imread(imgPath, cv2.IMREAD_COLOR)
     img_cvt = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -189,7 +189,7 @@ if __name__ == "__main__":
     # rot = cv2.warpAffine(img, M, shp)
     nets = loadModel()
     boxes, points=detect(img_cvt, nets)
-    drawFaces(img, boxes, points, savePath)
+    drawFaces(img, boxes, points, None)
     # starsPath = "E:\\BaiduNetdiskDownload\\seeprettyface_chs_stars_original\\seeprettyface_chs_stars_original\\chs_stars_original"
     # datasetPath = "E:\\BaiduNetdiskDownload\\seeprettyface_chs_stars_original\\seeprettyface_chs_stars_original\\chs_stars_faces"
     # ids, imgs = readStars(starsPath)

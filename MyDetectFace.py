@@ -292,8 +292,48 @@ def MyMtcnnNet(sess):
         boxes = tf.gather(pick_boxes3, nms_inds3, name='boxes')
         pointsXY = tf.gather(pointsXY, nms_inds3, name='points')
         load_np(os.path.join(model_path, 'det3.npy'), sess)
+        box_ind = get_minIou_tf(boxes)
+        boxes = tf.gather(boxes, box_ind)
+        pointsXY = tf.gather(pointsXY, box_ind)
 
     return [boxes, pointsXY], image_data
+
+
+def get_minIou_tf(boxes):
+    box_len = tf.shape(boxes)[0]
+    x1 = tf.reshape(boxes[:, 0], [1, -1])
+    y1 = tf.reshape(boxes[:, 1], [1, -1])
+    x2 = tf.reshape(boxes[:, 2], [1, -1])
+    y2 = tf.reshape(boxes[:, 3], [1, -1])
+    x1t = tf.reshape(boxes[:, 0], [-1, 1])
+    y1t = tf.reshape(boxes[:, 1], [-1, 1])
+    x2t = tf.reshape(boxes[:, 2], [-1, 1])
+    y2t = tf.reshape(boxes[:, 3], [-1, 1])
+    x1 = tf.tile(x1, [box_len, 1])
+    x1t = tf.tile(x1t, [1, box_len])
+    x1Mat = tf.where(x1>x1t, x1, x1t)
+    y1 = tf.tile(y1, [box_len, 1])
+    y1t = tf.tile(y1t, [1, box_len])
+    y1Mat = tf.where(y1>y1t, y1, y1t)
+    x2 = tf.tile(x2, [box_len, 1])
+    x2t = tf.tile(x2t, [1, box_len])
+    x2Mat = tf.where(x2<x2t, x2, x2t)
+    y2 = tf.tile(y2, [box_len, 1])
+    y2t = tf.tile(y2t, [1, box_len])
+    y2Mat = tf.where(y2<y2t, y2, y2t)
+    xMat = x2Mat-x1Mat
+    xMat = tf.where(xMat>0, xMat, tf.zeros(tf.shape(xMat)))
+    yMat = y2Mat-y1Mat
+    yMat = tf.where(yMat>0, yMat, tf.zeros(tf.shape(yMat)))
+    iouMat = xMat*yMat
+    eye = 1-tf.eye(box_len)
+    iouMat = iouMat*eye
+    maxIou = tf.math.reduce_max(iouMat, 1)
+    area = ((x2-x1)*(y2-y1))[0, :]
+    minRate = maxIou/area
+    box_ind = tf.where(minRate<0.7)
+    box_ind = tf.reshape(box_ind, [-1])
+    return box_ind
 
 
 def get_scales(img):
@@ -318,7 +358,7 @@ def build():
     input_node: pnet/input, pnet/scales, pnet/scale_len
     output_node: onet/boxes, onet/points
     '''
-    imgPath = "stars.jpg"
+    imgPath = "C:\\Users\\admin\\Pictures\\f.jpg"
     img = cv2.imread(imgPath, cv2.IMREAD_COLOR)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     scales = get_scales(img)
@@ -326,6 +366,7 @@ def build():
     sess = tf.Session()
     result, image_data1 = MyMtcnnNet(sess)
     boxes, points = sess.run(result, feed_dict={image_data1:img})
+    # print(boxes, boxes.shape)
     # g = tf.get_default_graph().as_graph_def()
     # for n in g.node:
     #     print(n.name)
@@ -344,7 +385,7 @@ def drawFaces(img, boxes, points):
         b2 = int(b[2])
         b3 = int(b[3])
         score = b[4]
-        if score < 0.95:
+        if score < 0.80:
             continue
         mid = (int((b0 + b2) / 2) - 15, int((b1 + b3) / 2)+5)
         top = (int((b0 + b2) / 2) - 15, b1-4)
@@ -355,6 +396,7 @@ def drawFaces(img, boxes, points):
         ptsY = pts[5:]
         for i in range(ptsX.shape[0]):
             cv2.circle(img, (ptsX[i], ptsY[i]), 2, (0,0,255))
+    # img = cv2.resize(img, (int(img.shape[1]*0.6), int(img.shape[0]*0.6)), interpolation=cv2.INTER_AREA)
     cv2.imshow('faces', img)
     return cv2.waitKey(0)
 
