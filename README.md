@@ -6,6 +6,6 @@ This is a MTCNN model built purely by tensorflow codes, with no numpy. I integra
 Now the model is able to output the transform matrix to do some warp-affine. You can use them, and together with output points, to adjust the cut faces to a more suitable angle like the demo shows below.
 # Prediction Demo
 I used this model to predict and get the result below.
-![predict result](https://github.com/TaoKai/MTCNN-TFMerge/blob/master/stars.jpg)
-The face cuts below using the output matrix to adjust face angle.
+![predict result](https://github.com/TaoKai/MTCNN-TFMerge/blob/master/stars.jpg)  
+The face cuts below using the output matrix to adjust face angle.  
 ![predict result](https://github.com/TaoKai/MTCNN-TFMerge/blob/master/cuts.jpg)
