@@ -295,8 +295,22 @@ def MyMtcnnNet(sess):
         box_ind = get_minIou_tf(boxes)
         boxes = tf.gather(boxes, box_ind)
         pointsXY = tf.gather(pointsXY, box_ind)
+        ptX = pointsXY[:, :5]
+        ptY = pointsXY[:, 5:]
+        pts = tf.transpose(tf.stack([ptX, ptY]), [1, 2, 0])
+        i3 = tf.constant(0)
+        M0 = tf.zeros([1, 2, 3])
+        c3 = lambda i, m: i < tf.shape(boxes)[0]
+        def body3(i, m):
+            ret = face_align_tf(pts[i])
+            ret = tf.expand_dims(ret, 0)
+            m = tf.concat([m, ret], axis=0)
+            i += 1
+            return i, m
+        Mret = tf.while_loop(c3, body3, [i3, M0], shape_invariants=[i3.get_shape(), tf.TensorShape([None, 2, 3])])
+        Ms = Mret[1][1:, :]
 
-    return [boxes, pointsXY], image_data
+    return [boxes, pts, Ms], image_data
 
 
 def get_minIou_tf(boxes):
@@ -336,6 +350,38 @@ def get_minIou_tf(boxes):
     return box_ind
 
 
+def face_align_tf(src):
+    dst = tf.constant(
+        [[30.2946, 51.6963],
+        [65.5318, 51.5014],
+        [48.0252, 71.7366],
+        [33.5493, 92.3655],
+        [62.7299, 92.2041]], dtype=tf.float32)
+    num = tf.shape(src)[0]
+    dim = tf.shape(src)[1]
+    src_mean = tf.math.reduce_mean(src, axis=0)
+    dst_mean = tf.math.reduce_mean(dst, axis=0)
+    src_demean = src - src_mean
+    dst_demean = dst - dst_mean
+    A = tf.matmul(tf.transpose(dst_demean), src_demean)/tf.cast(num, tf.float32)
+    d = tf.ones((dim,), dtype=tf.float32)
+    detA = tf.linalg.det(A)
+    d_1 = tf.concat([tf.ones((dim-1,), dtype=tf.float32), tf.constant([-1], tf.float32)], axis=0)
+    d = tf.cond(detA<0, lambda:d_1, lambda:d)
+    # T = tf.eye(dim + 1, dtype=tf.float32)
+    S, U, V = tf.linalg.svd(A)
+    T = tf.matmul(U, tf.linalg.diag(d))
+    T = tf.matmul(T, V)
+    S = tf.reshape(S, [1, -1])
+    d = tf.reshape(d, [-1, 1])
+    src_demean_var = tf.keras.backend.var(src_demean, axis=0)
+    scale = 1.0 / tf.math.reduce_sum(src_demean_var) * tf.matmul(S, d)[0, 0]
+    T_add = dst_mean - scale * tf.reshape(tf.matmul(T, tf.reshape(src_mean, [-1, 1])), [-1])
+    T_add = tf.reshape(T_add, [-1, 1])
+    T = tf.concat([T*scale, T_add], axis=1)
+    return T
+
+
 def get_scales(img):
     minsize=20
     factor=0.709
@@ -365,16 +411,33 @@ def build():
     scales = np.array(scales, dtype=np.float32)
     sess = tf.Session()
     result, image_data1 = MyMtcnnNet(sess)
-    boxes, points = sess.run(result, feed_dict={image_data1:img})
+    boxes, points, Ms = sess.run(result, feed_dict={image_data1:img})
     # print(boxes, boxes.shape)
     # g = tf.get_default_graph().as_graph_def()
     # for n in g.node:
     #     print(n.name)
     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-    drawFaces(img, list(boxes), list(points))
+    drawFaces(img, list(boxes), list(points), list(Ms))
 
-def drawFaces(img, boxes, points):
-    cuts = []
+def drawFaces(img, boxes, points, Ms):
+    def get_cuts(img, MList):
+        cuts = []
+        shp = (112, 96)
+        for m in MList:
+            warped = cv2.warpAffine(img, m, (shp[1],shp[0]), borderValue = 0.0)
+            cuts.append(warped)
+        return cuts
+    def batchShow(cuts):
+        col_num = int(np.sqrt(len(cuts)))+1
+        h = len(cuts)//col_num+1
+        if len(cuts)%col_num==0:
+            h -= 1
+        img_b = np.zeros([112*h, 96*col_num, 3], dtype=np.uint8)
+        for i,c in enumerate(cuts):
+            w = i%col_num
+            h = i//col_num
+            img_b[h*112:(h+1)*112, w*96:(w+1)*96, :] = c
+        return img_b
     orig_img = img.copy()
     for i,b in enumerate(boxes):
         if int(b[0])>=int(b[2]) or int(b[1])>=int(b[3]):
@@ -392,12 +455,13 @@ def drawFaces(img, boxes, points):
         cv2.rectangle(img, (b0, b1), (b2, b3), (0,0,255), 2)
         cv2.putText(img, str(score*100)[:4], top, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,0,255), 1)
         pts = points[i].astype(np.int32)
-        ptsX = pts[:5]
-        ptsY = pts[5:]
-        for i in range(ptsX.shape[0]):
-            cv2.circle(img, (ptsX[i], ptsY[i]), 2, (0,0,255))
+        for i in range(pts.shape[0]):
+            cv2.circle(img, (pts[i, 0], pts[i, 1]), 2, (0,0,255))
     # img = cv2.resize(img, (int(img.shape[1]*0.6), int(img.shape[0]*0.6)), interpolation=cv2.INTER_AREA)
+    cuts = get_cuts(orig_img, Ms)
+    img_b = batchShow(cuts)
     cv2.imshow('faces', img)
+    cv2.imshow('cuts', img_b)
     return cv2.waitKey(0)
 
 
