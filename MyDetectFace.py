@@ -404,7 +404,7 @@ def build():
     input_node: pnet/input, pnet/scales, pnet/scale_len
     output_node: onet/boxes, onet/points
     '''
-    imgPath = "C:\\Users\\admin\\Pictures\\stars.jpg"
+    imgPath = "C:\\Users\\admin\\Pictures\\f.jpg"
     img = cv2.imread(imgPath, cv2.IMREAD_COLOR)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     scales = get_scales(img)
@@ -420,13 +420,10 @@ def build():
     drawFaces(img, list(boxes), list(points), list(Ms))
 
 def drawFaces(img, boxes, points, Ms):
-    def get_cuts(img, MList):
-        cuts = []
+    def get_cut(img, m):
         shp = (112, 96)
-        for m in MList:
-            warped = cv2.warpAffine(img, m, (shp[1],shp[0]), borderValue = 0.0)
-            cuts.append(warped)
-        return cuts
+        warped = cv2.warpAffine(img, m, (shp[1],shp[0]), borderValue = 0.0)
+        return warped
     def batchShow(cuts):
         col_num = int(np.sqrt(len(cuts)))+1
         h = len(cuts)//col_num+1
@@ -439,6 +436,7 @@ def drawFaces(img, boxes, points, Ms):
             img_b[h*112:(h+1)*112, w*96:(w+1)*96, :] = c
         return img_b
     orig_img = img.copy()
+    cuts = []
     for i,b in enumerate(boxes):
         if int(b[0])>=int(b[2]) or int(b[1])>=int(b[3]):
             continue
@@ -448,8 +446,10 @@ def drawFaces(img, boxes, points, Ms):
         b2 = int(b[2])
         b3 = int(b[3])
         score = b[4]
-        if score < 0.80:
+        if score < 0.90:
             continue
+        cut = get_cut(orig_img, Ms[i])
+        cuts.append(cut)
         mid = (int((b0 + b2) / 2) - 15, int((b1 + b3) / 2)+5)
         top = (int((b0 + b2) / 2) - 15, b1-4)
         cv2.rectangle(img, (b0, b1), (b2, b3), (0,0,255), 2)
@@ -458,7 +458,6 @@ def drawFaces(img, boxes, points, Ms):
         for i in range(pts.shape[0]):
             cv2.circle(img, (pts[i, 0], pts[i, 1]), 2, (0,0,255))
     # img = cv2.resize(img, (int(img.shape[1]*0.6), int(img.shape[0]*0.6)), interpolation=cv2.INTER_AREA)
-    cuts = get_cuts(orig_img, Ms)
     img_b = batchShow(cuts)
     cv2.imshow('faces', img)
     cv2.imshow('cuts', img_b)
