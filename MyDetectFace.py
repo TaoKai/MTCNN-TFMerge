@@ -266,7 +266,7 @@ def MyMtcnnNet(sess):
         out1 = out[1]
         out2 = out[2]
         score = out2[:, 1]
-        ipass = tf.where(score>0.7)
+        ipass = tf.where(score>0.9)
         points = tf.gather_nd(out1, ipass)
         mv = tf.gather_nd(out0, ipass)
         pick_boxes3 = tf.gather_nd(pick_boxes3, ipass)
@@ -289,8 +289,8 @@ def MyMtcnnNet(sess):
         s = pick_boxes3[:, 4]
         nms_boxes3 = tf.transpose(tf.stack([y1, x1, y2, x2], axis=0))
         nms_inds3 = tf.image.non_max_suppression(nms_boxes3, s, 500, iou_threshold=0.5)
-        boxes = tf.gather(pick_boxes3, nms_inds3, name='boxes')
-        pointsXY = tf.gather(pointsXY, nms_inds3, name='points')
+        boxes = tf.gather(pick_boxes3, nms_inds3)
+        pointsXY = tf.gather(pointsXY, nms_inds3, name='points_raw')
         box04 = tf.zeros((1, 5))
         points04 = tf.zeros((1, 10))
         boxes = tf.concat([boxes, box04], axis=0)
@@ -298,24 +298,67 @@ def MyMtcnnNet(sess):
         load_np(os.path.join(model_path, 'det3.npy'), sess)
         box_ind = get_minIou_tf(boxes)
         boxes = tf.gather(boxes, box_ind)
+        boxes = borderCrop_tf(boxes, img_shp, name='boxes')
         pointsXY = tf.gather(pointsXY, box_ind)
         ptX = pointsXY[:, :5]
         ptY = pointsXY[:, 5:]
-        pts = tf.transpose(tf.stack([ptX, ptY]), [1, 2, 0])
+        pts = tf.transpose(tf.stack([ptX, ptY]), [1, 2, 0], name='points')
         i3 = tf.constant(0)
-        M0 = tf.zeros([1, 2, 3])
+        M0 = tf.zeros([1, 3, 3])
         c3 = lambda i, m: i < tf.shape(boxes)[0]
         def body3(i, m):
             ret = face_align_tf(pts[i])
+            ret = tf.concat([ret, tf.constant([[0.,0.,1.]])], axis=0)
+            ret = tf.linalg.inv(ret)
             ret = tf.expand_dims(ret, 0)
             m = tf.concat([m, ret], axis=0)
             i += 1
             return i, m
-        Mret = tf.while_loop(c3, body3, [i3, M0], shape_invariants=[i3.get_shape(), tf.TensorShape([None, 2, 3])])
+        Mret = tf.while_loop(c3, body3, [i3, M0], shape_invariants=[i3.get_shape(), tf.TensorShape([None, 3, 3])])
         Ms = Mret[1][1:, :]
+        Ms = tf.reshape(Ms, tf.shape(Ms), name='Ms_inv')
+        #affine test vars
+        w_int = tf.cast(w_img, tf.int32)
+        h_int = tf.cast(h_img, tf.int32)
+        orig_x = tf.range(96.0)
+        orig_y = tf.range(112.0)
+        orig_x = tf.reshape(orig_x, [1, -1])
+        orig_y = tf.reshape(orig_y, [-1, 1])
+        orig_xMat = tf.tile(orig_x, [112, 1])
+        orig_yMat = tf.tile(orig_y, [1, 96])
+        orig_xFlat = tf.reshape(orig_xMat, [1, -1])
+        orig_yFlat = tf.reshape(orig_yMat, [1, -1])
+        orig_1Flat = tf.ones([1, 112*96], dtype=tf.float32)
+        orig_mat = tf.concat([orig_xFlat, orig_yFlat, orig_1Flat], axis=0)
+        orig_mat = tf.expand_dims(orig_mat, 0)
+        dest_mat = tf.matmul(Ms, orig_mat)[:, :2, :]
+        dest_mat = tf.cast(tf.round(dest_mat), dtype=tf.int32)
+        dest_mat = tf.transpose(dest_mat, [0, 2, 1])
+        dest_xMat = dest_mat[:, :, 0]
+        dest_yMat = dest_mat[:, :, 1]
+        dest_xMat = tf.where(tf.logical_and(dest_xMat>=0, dest_xMat<w_int), dest_xMat, tf.zeros(tf.shape(dest_xMat), dtype=tf.int32))
+        dest_yMat = tf.where(tf.logical_and(dest_yMat>=0, dest_yMat<h_int), dest_yMat, tf.zeros(tf.shape(dest_yMat), dtype=tf.int32))
+        dest_indices = tf.stack([dest_yMat, dest_xMat], axis=2)
+        image_flat = tf.cast(image_data, dtype=tf.uint8)
+        image_cutMat = tf.gather_nd(image_flat, dest_indices)
+        image_cutMat = tf.reshape(image_cutMat, [-1, 112, 96, 3], name='FinalCuts')
+    return [boxes, pts, Ms], image_cutMat, image_data
 
-    return [boxes, pts, Ms], image_data
-
+def borderCrop_tf(boxes, size, name='boxes'):
+    h = size[0]
+    w = size[1]
+    coords = boxes[:, :4]
+    scores = tf.reshape(boxes[:, -1], [-1, 1])
+    shp = tf.shape(coords)
+    zeros = tf.zeros(shp)
+    hs = tf.ones(shp[0])*(h-1)
+    ws = tf.ones(shp[0])*(w-1)
+    hws = tf.stack([ws, hs, ws, hs], axis=0)
+    hws = tf.transpose(hws)
+    coords = tf.where(coords>0, coords, zeros)
+    coords = tf.where(coords<hws, coords, hws)
+    boxes = tf.concat([coords, scores], axis=1, name=name)
+    return boxes
 
 def get_minIou_tf(boxes):
     box_len = tf.shape(boxes)[0]
@@ -408,24 +451,40 @@ def build():
     input_node: pnet/input, pnet/scales, pnet/scale_len
     output_node: onet/boxes, onet/points
     '''
+    def batchShow(cuts):
+        col_num = int(np.sqrt(len(cuts)))+1
+        h = len(cuts)//col_num+1
+        if len(cuts)%col_num==0:
+            h -= 1
+        img_b = np.zeros([112*h, 96*col_num, 3], dtype=np.uint8)
+        for i,c in enumerate(cuts):
+            w = i%col_num
+            h = i//col_num
+            img_b[h*112:(h+1)*112, w*96:(w+1)*96, :] = c
+        img_b = cv2.cvtColor(img_b, cv2.COLOR_RGB2BGR)
+        return img_b
+
     imgPath = "C:\\Users\\admin\\Pictures\\f.jpg"
     img = cv2.imread(imgPath, cv2.IMREAD_COLOR)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     scales = get_scales(img)
     scales = np.array(scales, dtype=np.float32)
     sess = tf.Session()
-    result, image_data1 = MyMtcnnNet(sess)
-    boxes, points, Ms = sess.run(result, feed_dict={image_data1:img})
-    # print(boxes, boxes.shape)
-    # g = tf.get_default_graph().as_graph_def()
-    # for n in g.node:
-    #     print(n.name)
-    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-    drawFaces(img, list(boxes), list(points), list(Ms))
+    result, finalCuts, image_data = MyMtcnnNet(sess)
+    # boxes, points, Ms = sess.run(result, feed_dict={image_data:img})
+    # img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    # drawFaces(img, list(boxes), list(points), list(Ms))
+
+    # test affine
+    cuts = sess.run(finalCuts, feed_dict={image_data:img})
+    img = batchShow(list(cuts))
+    cv2.imshow('image', img)
+    cv2.waitKey(0)
 
 def drawFaces(img, boxes, points, Ms):
     def get_cut(img, m):
         shp = (112, 96)
+        m = np.linalg.inv(m)[:2, :]
         warped = cv2.warpAffine(img, m, (shp[1],shp[0]), borderValue = 0.0)
         return warped
     def batchShow(cuts):
