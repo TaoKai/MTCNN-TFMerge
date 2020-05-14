@@ -266,7 +266,7 @@ def MyMtcnnNet(sess):
         out1 = out[1]
         out2 = out[2]
         score = out2[:, 1]
-        ipass = tf.where(score>0.9)
+        ipass = tf.where(score>0.95)
         points = tf.gather_nd(out1, ipass)
         mv = tf.gather_nd(out0, ipass)
         pick_boxes3 = tf.gather_nd(pick_boxes3, ipass)
@@ -318,8 +318,6 @@ def MyMtcnnNet(sess):
         Ms = Mret[1][1:, :]
         Ms = tf.reshape(Ms, tf.shape(Ms), name='Ms_inv')
         #affine test vars
-        w_int = tf.cast(w_img, tf.int32)
-        h_int = tf.cast(h_img, tf.int32)
         orig_x = tf.range(96.0)
         orig_y = tf.range(112.0)
         orig_x = tf.reshape(orig_x, [1, -1])
@@ -331,18 +329,30 @@ def MyMtcnnNet(sess):
         orig_1Flat = tf.ones([1, 112*96], dtype=tf.float32)
         orig_mat = tf.concat([orig_xFlat, orig_yFlat, orig_1Flat], axis=0)
         orig_mat = tf.expand_dims(orig_mat, 0)
-        dest_mat = tf.matmul(Ms, orig_mat)[:, :2, :]
-        dest_mat = tf.cast(tf.round(dest_mat), dtype=tf.int32)
-        dest_mat = tf.transpose(dest_mat, [0, 2, 1])
-        dest_xMat = dest_mat[:, :, 0]
-        dest_yMat = dest_mat[:, :, 1]
-        dest_xMat = tf.where(tf.logical_and(dest_xMat>=0, dest_xMat<w_int), dest_xMat, tf.zeros(tf.shape(dest_xMat), dtype=tf.int32))
-        dest_yMat = tf.where(tf.logical_and(dest_yMat>=0, dest_yMat<h_int), dest_yMat, tf.zeros(tf.shape(dest_yMat), dtype=tf.int32))
-        dest_indices = tf.stack([dest_yMat, dest_xMat], axis=2)
-        image_flat = tf.cast(image_data, dtype=tf.uint8)
-        image_cutMat = tf.gather_nd(image_flat, dest_indices)
-        image_cutMat = tf.reshape(image_cutMat, [-1, 112, 96, 3], name='FinalCuts')
-    return [boxes, pts, Ms], image_cutMat, image_data
+        dest_mat_float = tf.matmul(Ms, orig_mat)[:, :2, :]
+        dest_mat_floor = tf.floor(dest_mat_float)
+        dest_mat_diff = dest_mat_float-dest_mat_floor
+        dest_mat_floor = tf.where(dest_mat_floor>=0, dest_mat_floor, tf.zeros(tf.shape(dest_mat_floor)))
+        dest_mat_X0 = dest_mat_floor[:, 0, :]
+        dest_mat_Y0 = dest_mat_floor[:, 1, :]
+        dest_mat_X0 = tf.where(dest_mat_X0<=w_img-2, dest_mat_X0, tf.ones(tf.shape(dest_mat_X0))*(w_img-2))
+        dest_mat_Y0 = tf.where(dest_mat_Y0<=h_img-2, dest_mat_Y0, tf.ones(tf.shape(dest_mat_Y0))*(h_img-2))
+        dest_mat_X1 = dest_mat_X0+1
+        dest_mat_Y1 = dest_mat_Y0+1
+        dest_mat_00 = tf.cast(tf.transpose(tf.stack([dest_mat_Y0, dest_mat_X0], axis=1), [0, 2, 1]), dtype=tf.int32)
+        dest_mat_01 = tf.cast(tf.transpose(tf.stack([dest_mat_Y1, dest_mat_X0], axis=1), [0, 2, 1]), dtype=tf.int32)
+        dest_mat_10 = tf.cast(tf.transpose(tf.stack([dest_mat_Y0, dest_mat_X1], axis=1), [0, 2, 1]), dtype=tf.int32)
+        dest_mat_11 = tf.cast(tf.transpose(tf.stack([dest_mat_Y1, dest_mat_X1], axis=1), [0, 2, 1]), dtype=tf.int32)
+        image_00 = tf.gather_nd(image_data, dest_mat_00)
+        image_01 = tf.gather_nd(image_data, dest_mat_01)
+        image_10 = tf.gather_nd(image_data, dest_mat_10)
+        image_11 = tf.gather_nd(image_data, dest_mat_11)
+        dest_x_diff = tf.reshape(dest_mat_diff[:, 0, :], [tf.shape(dest_mat_diff)[0], -1, 1])
+        dest_y_diff = tf.reshape(dest_mat_diff[:, 1, :], [tf.shape(dest_mat_diff)[0], -1, 1])
+        image_interp = image_00*(1-dest_x_diff)*(1-dest_y_diff)+image_10*(dest_x_diff)*(1-dest_y_diff)+\
+                        image_01*(1-dest_x_diff)*(dest_y_diff)+image_11*(dest_x_diff)*(dest_y_diff)
+        image_final = tf.reshape(tf.cast(image_interp, dtype=tf.uint8), [-1, 112, 96, 3], name='FinalCuts')
+    return [boxes, pts, Ms], image_final, image_data
 
 def borderCrop_tf(boxes, size, name='boxes'):
     h = size[0]
@@ -464,21 +474,19 @@ def build():
         img_b = cv2.cvtColor(img_b, cv2.COLOR_RGB2BGR)
         return img_b
 
-    imgPath = "C:\\Users\\admin\\Pictures\\f.jpg"
+    imgPath = "C:\\Users\\admin\\Pictures\\f.png"
     img = cv2.imread(imgPath, cv2.IMREAD_COLOR)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     scales = get_scales(img)
     scales = np.array(scales, dtype=np.float32)
     sess = tf.Session()
     result, finalCuts, image_data = MyMtcnnNet(sess)
-    # boxes, points, Ms = sess.run(result, feed_dict={image_data:img})
-    # img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-    # drawFaces(img, list(boxes), list(points), list(Ms))
-
-    # test affine
-    cuts = sess.run(finalCuts, feed_dict={image_data:img})
-    img = batchShow(list(cuts))
-    cv2.imshow('image', img)
+    [boxes, points, Ms], fCuts = sess.run([result, finalCuts], feed_dict={image_data:img})
+    print(fCuts, fCuts.shape)
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+    drawFaces(img, list(boxes), list(points), list(Ms))
+    img_b = batchShow(list(fCuts))
+    cv2.imshow('image', img_b)
     cv2.waitKey(0)
 
 def drawFaces(img, boxes, points, Ms):
@@ -524,7 +532,7 @@ def drawFaces(img, boxes, points, Ms):
     img_b = batchShow(cuts)
     cv2.imshow('faces', img)
     cv2.imshow('cuts', img_b)
-    return cv2.waitKey(0)
+    return cv2.waitKey(1)
 
 
 if __name__ == "__main__":
